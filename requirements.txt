@@ -1,0 +1,6 @@
+pandas
+prophet
+influxdb-client-3
+numpy
+scikit-learn
+paho-mqtt
