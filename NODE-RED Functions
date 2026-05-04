@@ -1,0 +1,265 @@
+// ----------------------------------------------------------------------------------------------------
+// Node-RED Pipeline Simule Function
+// ----------------------------------------------------------------------------------------------------
+
+
+// --- 0. Retrieve persistent states ---
+var states = flow.get("house_states") || {
+    living: { temp: 20.0, tv_on: false },
+    kitchen: { fridge_cycle: 0, oven_on: false, oven_timer: 0 },
+    bed1: { temp: 18.0 },
+    bed2: { temp: 17.0 },
+    bath: { humidity: 50.0, boiler_on: false }
+};
+
+// Retrieve circuit breaker state (Feedback Loop)
+// This is updated by the MQTT node receiving Python commands
+var breakers = global.get("circuit_breakers") || {};
+
+var now = new Date();
+var hour = now.getHours();
+var minute = now.getMinutes();
+var second = now.getSeconds();
+
+// --- 1. Normal calculation per room ---
+
+// Living Room
+var living = states.living;
+living.temp += (Math.random() - 0.5) * 0.2;
+var presence = (hour > 7 && hour < 23);
+var hvac_power = (living.temp < 20 && presence) ? 3000 : 1000;
+if (hvac_power > 0) living.temp += 0.05;
+var is_dark = (hour > 20 || hour < 7);
+var light_power = (presence && is_dark && Math.random() > 0.8) ? 40 : 0;
+if (hour >= 19 && hour <= 23 && Math.random() < 0.05) living.tv_on = true;
+if (hour > 23 || hour < 7 || Math.random() < 0.02) living.tv_on = false;
+var tv_power = living.tv_on ? 150 : 5;
+living.hvac_power = hvac_power;
+living.light_power = light_power;
+living.tv_power = tv_power;
+living.total_power = hvac_power + light_power + tv_power;
+
+// Kitchen
+var kitchen = states.kitchen;
+kitchen.fridge_cycle = (kitchen.fridge_cycle + 1) % 30;
+var fridge_power = (kitchen.fridge_cycle < 10) ? 2000 : 1000;
+if (!kitchen.oven_on) {
+    if (hour >= 18 && hour <= 20 && Math.random() < 0.02) {
+        kitchen.oven_on = true;
+        kitchen.oven_timer = 10;
+    }
+} else {
+    kitchen.oven_timer--;
+    if (kitchen.oven_timer <= 0) kitchen.oven_on = false;
+}
+var oven_power = kitchen.oven_on ? 2500 : 800;
+var k_light_power = (Math.random() > 0.9) ? 20 : 0;
+kitchen.fridge_power = fridge_power;
+kitchen.oven_power = oven_power;
+kitchen.light_power = k_light_power;
+kitchen.total_power = fridge_power + oven_power + k_light_power;
+
+// Bedroom 1
+var bed1 = states.bed1;
+var schedule_heat1 = (hour >= 6 && hour <= 8) || (hour >= 21 && hour <= 23);
+var heater1_power = (bed1.temp < 19 && schedule_heat1) ? 2000 : 750;
+if (heater1_power > 0) bed1.temp += 0.05;
+else bed1.temp += (Math.random() - 0.5) * 0.1;
+var standby1 = 15;
+bed1.heater_power = heater1_power;
+bed1.standby_power = standby1;
+bed1.total_power = heater1_power + standby1;
+
+// Bedroom 2
+var bed2 = states.bed2;
+var schedule_heat2 = (hour >= 21 && hour <= 23);
+var heater2_power = (bed2.temp < 18 && schedule_heat2) ? 1200 : 600;
+if (heater2_power > 0) bed2.temp += 0.04;
+else bed2.temp += (Math.random() - 0.5) * 0.1;
+bed2.heater_power = heater2_power;
+bed2.total_power = heater2_power;
+
+// Bathroom
+var bath = states.bath;
+if (Math.random() < 0.05) bath.humidity = 80;
+else bath.humidity = Math.max(40, bath.humidity - 1);
+var vmc_power = (bath.humidity > 60) ? 500 : 0;
+
+if ((hour === 7 || hour === 22) && Math.random() < 0.1) {
+    bath.boiler_on = true;
+    setTimeout(() => {
+        var s = flow.get("house_states");
+        if (s && s.bath) s.bath.boiler_on = false;
+        flow.set("house_states", s);
+    }, 10000);
+}
+var boiler_power = bath.boiler_on ? 4000 : 1500;
+bath.vmc_power = vmc_power;
+bath.boiler_power = boiler_power;
+bath.total_power = vmc_power + boiler_power;
+
+// Guest Room / Hall
+var guest_heater = (Math.random() > 0.99) ? 2000 : 600;
+var hall_light = (Math.random() > 0.9 && hour > 6 && hour < 23) ? 10 : 0;
+var guest_total = guest_heater + hall_light;
+
+// Save normal states
+flow.set("house_states", states);
+
+// ─────────────────────────────────────────────────────────────
+// 2. ANOMALY MANAGEMENT (Injection)
+// ─────────────────────────────────────────────────────────────
+
+var anomalyType = "normal";
+var isAnomalyTime = (second < 2 && minute % 10 === 0);
+
+if (isAnomalyTime) {
+    var dice = Math.random();
+
+    // CASE A: High Spike
+    if (dice < 0.70) {
+        anomalyType = "spike_high";
+        var victims = ["living", "kitchen", "bed1", "bed2", "bath"];
+        var victimRoom = victims[Math.floor(Math.random() * victims.length)];
+        var extraLoad = 6000 + Math.random() * 5000; 
+        states[victimRoom].total_power += extraLoad;
+        states[victimRoom].is_anomalous = true;
+    }
+    // CASE B: Blackout
+    else if (dice < 0.90) {
+        anomalyType = "blackout";
+        living.total_power = 0;
+        kitchen.total_power = 0;
+        bed1.total_power = 0;
+        bed2.total_power = 0;
+        bath.total_power = 0;
+        guest_total = 0;
+    }
+    // CASE C: Sensor Error
+    else {
+        anomalyType = "sensor_error";
+        kitchen.total_power = -100;
+    }
+}
+
+// ─────────────────────────────────────────────────────────────
+// 3. APPLY FEEDBACK (MQTT CUT-OFF)
+// ─────────────────────────────────────────────────────────────
+
+// If the Python script detected an anomaly and sent a command,
+// the global variable 'circuit_breakers' will contain 'true' for the room.
+// We then force the power to 0.
+
+if (breakers.living === true) {
+    living.total_power = 0;
+}
+if (breakers.kitchen === true) {
+    kitchen.total_power = 0;
+}
+if (breakers.bed1 === true) {
+    bed1.total_power = 0;
+}
+if (breakers.bed2 === true) {
+    bed2.total_power = 0;
+}
+if (breakers.bath === true) {
+    bath.total_power = 0;
+}
+if (breakers.guest === true) {
+    guest_total = 0;
+}
+
+// ─────────────────────────────────────────────────────────────
+// 4. FINAL GLOBAL CALCULATION
+// ─────────────────────────────────────────────────────────────
+
+var global_power = living.total_power + kitchen.total_power + bed1.total_power + bed2.total_power + bath.total_power + guest_total;
+var displayed_global_power = Math.max(0, global_power); // Safety guard for display
+
+var voltage_noise = (Math.random() - 0.5) * 5;
+var voltage = 230 + voltage_noise;
+var current = displayed_global_power / 230;
+
+// ─────────────────────────────────────────────────────────────
+// 5. BUILD INFLUXDB MESSAGE
+// ─────────────────────────────────────────────────────────────
+
+msg.measurement = "smart_home";
+msg.payload = {
+    fields: {
+        living_temp: parseFloat(states.living.temp.toFixed(1)),
+        living_total_power: living.total_power,
+        kitchen_total_power: kitchen.total_power,
+        bed1_total_power: bed1.total_power,
+        bed2_total_power: bed2.total_power,
+        bath_total_power: bath.total_power,
+        guest_total_power: guest_total,
+
+        global_power_watts: parseFloat(displayed_global_power.toFixed(0)),
+        global_voltage: parseFloat(voltage.toFixed(1)),
+        global_current: parseFloat(current.toFixed(2)),
+
+        is_anomaly: (anomalyType !== "normal") ? 1 : 0,
+        anomaly_type_label: anomalyType
+    },
+    tags: {
+        house: "simulation",
+        source: "full_house",
+        anomaly_id: anomalyType
+    }
+};
+
+return msg;
+
+
+// ----------------------------------------------------------------------------------------------------
+// Node-RED Alert Function
+// ----------------------------------------------------------------------------------------------------
+
+
+// Receive alert from Python
+const alert = msg.payload;
+
+// Format time
+const time = new Date(alert.timestamp).toLocaleTimeString('fr-FR');
+
+// Create message
+msg.payload = {
+    topic: "power_alert",
+    alert: true,
+    timestamp: time,
+    current_power: alert.current_power,
+    threshold: alert.threshold,
+    exceedance: alert.exceedance_percent,
+    message: alert.message,
+    severity: "high"
+};
+
+// Log in Node-RED
+console.log("ALERT RECEIVED: " + msg.payload.message);
+console.log("Power: " + alert.current_power + "W");
+console.log("Threshold: " + alert.threshold + "W");
+console.log("Exceedance: " + alert.exceedance_percent + "%");
+
+return msg;
+
+
+// ----------------------------------------------------------------------------------------------------
+// Node-RED Feedback Control Function
+// ----------------------------------------------------------------------------------------------------
+
+
+// This node receives the command from Python
+var command = msg.payload;
+
+// Store breaker state in global context
+// If action = power_off, set to true (breaker open = power cut)
+if (command.action === "power_off") {
+    var breakers = global.get("circuit_breakers") || {};
+    breakers[command.room] = true; // true = circuit cut
+    global.set("circuit_breakers", breakers);
+    node.warn("COMMAND RECEIVED: Cut off " + command.room);
+}
+
+// Optional: add automatic reset logic after some time if needed
+return msg;
