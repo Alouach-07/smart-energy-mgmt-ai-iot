@@ -57,8 +57,7 @@ Receives mitigation commands via MQTT to update virtual circuit breaker statuses
 1.  **Clone the repository**:
     ```bash
     git clone [https://github.com/your-username/smart-energy-mgmt-ai-iot.git](https://github.com/your-username/smart-energy-mgmt-ai-iot.git)
-    
-```
+    ```
 2.  **Install Python dependencies**:
     ```bash
     pip install -r requirements.txt
