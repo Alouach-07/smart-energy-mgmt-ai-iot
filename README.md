@@ -6,7 +6,7 @@ This repository contains the full implementation of an intelligent energy manage
 
 The architecture follows a four-stage pipeline designed for efficiency and scalability in embedded systems[cite: 1]:
 
-![System Architecture](img/Energy Management Architecture.png)
+![System Architecture](img/Energy-Management-Architecture.png)
 
 1.  **Smart Building Simulation**: Realistic modeling of 6 residential zones (Kitchen, Living Room, etc.) with automated load cycles and anomaly injection via Node-RED[cite: 1, 4].
 2.  **Data Storage**: Time-series data management using InfluxDB with optimized retention policies[cite: 1].
@@ -22,15 +22,15 @@ The simulation and communication backbone is built on Node-RED. The flows manage
 
 **1. Main Simulation Flow**
 This flow simulates the 5-second tick data for the entire building and formats it for InfluxDB[cite: 1, 4].
-![Simulation Flow](img/node-red simulate pipeline.png)
+![Simulation Flow](img/node-red-simulate-pipeline.png)
 
 **2. Webhook & Alerting System**
 Handles external triggers and logs anomalies identified by the Python analysis scripts[cite: 1, 4].
-![Alert Flow](img/alert pipeline.png)
+![Alert Flow](img/alert-pipeline.png)
 
 **3. Feedback Control Loop**
 Receives mitigation commands via MQTT to update virtual circuit breaker statuses in real-time[cite: 3, 4].
-![Feedback Flow](img/feedback_control pipeline.png)
+![Feedback Flow](img/feedback_control-pipeline.png)
 
 ---
 
